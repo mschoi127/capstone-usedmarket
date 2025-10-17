@@ -1,0 +1,41 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+coverage/
+**/GeneratedPluginRegistrant.*
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.podspec
+android/.gradle/
+android/**/build/
+*.iml
+local.properties
+
+# Node.js (api)
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-lock.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints
+
+# 공통: 시크릿/데이터/IDE
+.env
+.env.*
+secrets.json
+config.yaml
+data/
+logs/
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
