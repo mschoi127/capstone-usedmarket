@@ -4,99 +4,189 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../data/api_client.dart';
+import '../data/model_storage_resolver.dart';
+import '../utils/model_formatters.dart';
 
 /// ---------- 데이터 계층 ----------
 
-class TrendResult {
-  /// result[platform][yyyy-mm-dd]['new'|'used'] => { avg, count }
-  final Map<String, Map<String, Map<String, dynamic>>> result;
+class TrendPoint {
+  final int? average;
+  final int count;
+  const TrendPoint({required this.average, required this.count});
+}
 
-  TrendResult(this.result);
+class PlatformAverage {
+  final int average;
+  final int count;
+  const PlatformAverage({required this.average, required this.count});
+}
+
+class TrendResult {
+  final Map<String, TrendPoint> timeline;
+  final Map<String, PlatformAverage> platformAverages;
+  final String? condition;
+  final int days;
+
+  TrendResult({
+    required this.timeline,
+    required this.platformAverages,
+    required this.condition,
+    required this.days,
+  });
 
   List<DateTime> get orderedDates {
-    final set = <DateTime>{};
-    for (final byDate in result.values) {
-      for (final d in byDate.keys) {
-        final dt = DateTime.tryParse(d);
-        if (dt != null) set.add(DateTime(dt.year, dt.month, dt.day));
-      }
-    }
-    final list = set.toList()..sort();
-    return list;
+    final dates = timeline.keys
+        .map((e) => DateTime.tryParse(e))
+        .whereType<DateTime>()
+        .map((d) => DateTime(d.year, d.month, d.day))
+        .toSet()
+        .toList();
+    dates.sort();
+    return dates;
   }
 
-  List<FlSpot> toLineSpots(String platform, List<DateTime> dates,
-      {required bool isNew}) {
-    final byDate = result[platform] ?? const {};
+  List<FlSpot> toLineSpots(List<DateTime> dates) {
     final spots = <FlSpot>[];
     for (var i = 0; i < dates.length; i++) {
       final key = _key(dates[i]);
-      final avg = (byDate[key]?[isNew ? 'new' : 'used']?['avg']) as num?;
-      if (avg != null) spots.add(FlSpot(i.toDouble(), avg.toDouble()));
+      final point = timeline[key];
+      if (point != null && point.average != null) {
+        spots.add(FlSpot(i.toDouble(), point.average!.toDouble()));
+      }
     }
     return spots;
   }
 
-  int avgPrice(String platform, List<DateTime> dates, {required bool isNew}) {
-    final byDate = result[platform] ?? const {};
-    int sum = 0, count = 0;
-    for (final d in dates) {
-      final key = _key(d);
-      final avg = (byDate[key]?[isNew ? 'new' : 'used']?['avg']) as num?;
-      if (avg != null) {
-        sum += avg.round();
-        count++;
-      }
-    }
-    return count == 0 ? 0 : (sum / count).round();
-  }
+  int averageForPlatform(String platform) =>
+      platformAverages[platform]?.average ?? 0;
+
+  int countForPlatform(String platform) =>
+      platformAverages[platform]?.count ?? 0;
 
   static String _key(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 }
 
-class PriceRecommendation {
-  final int? recommended;
-  final List<num>? range;
-  final int? sampleCount;
-  PriceRecommendation({this.recommended, this.range, this.sampleCount});
+class MarketSummary {
+  final int? averagePrice;
+  final int? minPrice;
+  final int? maxPrice;
+  final double? priceChangePct;
+  final int listingCount;
+  final double? listingChangePct;
+
+  const MarketSummary({
+    required this.averagePrice,
+    required this.minPrice,
+    required this.maxPrice,
+    required this.priceChangePct,
+    required this.listingCount,
+    required this.listingChangePct,
+  });
+
+  factory MarketSummary.fromMap(Map<String, dynamic> map) {
+    int? asInt(dynamic value) => value is num ? value.round() : null;
+    double? asDouble(dynamic value) =>
+        value is num ? double.parse(value.toStringAsFixed(1)) : null;
+    return MarketSummary(
+      averagePrice: asInt(map['averagePrice']),
+      minPrice: asInt(map['minPrice']),
+      maxPrice: asInt(map['maxPrice']),
+      priceChangePct: asDouble(map['priceChangePct']),
+      listingCount: asInt(map['listingCount']) ?? 0,
+      listingChangePct: asDouble(map['listingChangePct']),
+    );
+  }
 }
 
 class TrendRepository {
   final ApiClient _api;
   TrendRepository(this._api);
 
-  /// ApiClient.baseUrl 가 “…/products” 라면 path는 '/price-trend', '/recommend-price'
-  Future<TrendResult> fetchTrend(String keyword) async {
-    final res = await _api
-        .get<Map<String, dynamic>>('/price-trend', query: {'keyword': keyword});
-    final raw = (res.data ?? {});
-    if (raw.isEmpty) throw StateError('no-trend');
+  Future<TrendResult> fetchTrend(
+    String keyword, {
+    String? model,
+    String? storage,
+    String? condition,
+    List<String>? platforms,
+  }) async {
+    final query = <String, String>{'keyword': keyword};
+    if (model != null && model.isNotEmpty) query['model'] = model;
+    if (storage != null && storage.isNotEmpty) query['storage'] = storage;
+    if (condition != null && condition.isNotEmpty) {
+      query['condition'] = condition;
+    }
+    if (platforms != null && platforms.isNotEmpty) {
+      query['platform'] = platforms.join(',');
+    }
 
-    final casted = raw.map(
-      (p, v) => MapEntry(
-        p,
-        (v as Map).cast<String, dynamic>().map(
-              (d, dv) => MapEntry(d, (dv as Map).cast<String, dynamic>()),
-            ),
-      ),
+    final res =
+        await _api.get<Map<String, dynamic>>('/price-trend', query: query);
+    final data = res.data ?? {};
+    if (data.isEmpty) throw StateError('no-trend');
+
+    final timelineRaw =
+        (data['timeline'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final timeline = <String, TrendPoint>{};
+    timelineRaw.forEach((key, value) {
+      final map = (value as Map).cast<String, dynamic>();
+      final avg = map['average'];
+      final cnt = map['count'];
+      timeline[key] = TrendPoint(
+        average: avg is num ? avg.round() : null,
+        count: cnt is num ? cnt.toInt() : 0,
+      );
+    });
+
+    final platformRaw =
+        (data['platformAverages'] as Map?)?.cast<String, dynamic>() ??
+            const {};
+    final platformAverages = <String, PlatformAverage>{};
+    platformRaw.forEach((key, value) {
+      final map = (value as Map).cast<String, dynamic>();
+      final avg = map['average'];
+      final cnt = map['count'];
+      if (avg is num && cnt is num) {
+        platformAverages[key] =
+            PlatformAverage(average: avg.round(), count: cnt.toInt());
+      }
+    });
+
+    final conditionResp = data['condition'] as String?;
+    final days = data['days'] is num ? (data['days'] as num).toInt() : 7;
+
+    return TrendResult(
+      timeline: timeline,
+      platformAverages: platformAverages,
+      condition: conditionResp,
+      days: days,
     );
-    return TrendResult(casted);
   }
 
-  Future<PriceRecommendation?> fetchRecommendation(String keyword,
-      {required bool isNew}) async {
-    final res = await _api.get<Map<String, dynamic>>('/recommend-price',
-        query: {'keyword': keyword});
-    final m = (res.data ?? {});
-    final pick = isNew ? m['new'] : m['used'];
-    if (pick == null) return null;
-    final map = (pick as Map).cast<String, dynamic>();
-    return PriceRecommendation(
-      recommended: map['recommended'],
-      range: (map['range'] as List?)?.cast<num>(),
-      sampleCount: map['sampleCount'],
-    );
+  Future<MarketSummary?> fetchSummary(
+    String keyword, {
+    String? model,
+    String? storage,
+    String? condition,
+    List<String>? platforms,
+  }) async {
+    final query = <String, String>{'keyword': keyword};
+    if (model != null && model.isNotEmpty) query['model'] = model;
+    if (storage != null && storage.isNotEmpty) query['storage'] = storage;
+    if (condition != null && condition.isNotEmpty) {
+      query['condition'] = condition;
+    }
+    if (platforms != null && platforms.isNotEmpty) {
+      query['platform'] = platforms.join(',');
+    }
+
+    final res =
+        await _api.get<Map<String, dynamic>>('/market-summary', query: query);
+    final data = res.data;
+    if (data is Map<String, dynamic> && data.isNotEmpty) {
+      return MarketSummary.fromMap(data);
+    }
+    return null;
   }
 }
 
@@ -114,16 +204,19 @@ class _AnalysisPageState extends State<AnalysisPage> {
   final _fmt = NumberFormat.decimalPattern('ko_KR');
 
   static const _platformsAll = ['번개장터', '당근마켓', '중고나라'];
+  static const _conditionOptions = ['S급', 'A급', 'B급', 'C급'];
 
-  String _condition = '중고'; // '중고' | '새제품'
+  String _condition = 'A급';
   final Set<String> _pickPlatforms = {..._platformsAll};
 
   bool _loading = false;
   bool _hasSearched = false;
+  String? _resolvedModel;
+  String? _resolvedStorage;
 
   TrendResult? _trend;
   List<DateTime> _dates = [];
-  PriceRecommendation? _rec;
+  MarketSummary? _summary;
 
   @override
   void dispose() {
@@ -132,6 +225,7 @@ class _AnalysisPageState extends State<AnalysisPage> {
   }
 
   Future<void> _search() async {
+    if (_loading) return;
     final kw = _kwCtrl.text.trim();
     if (kw.isEmpty) {
       _toast('검색어를 입력하세요.');
@@ -139,26 +233,46 @@ class _AnalysisPageState extends State<AnalysisPage> {
     }
     setState(() => _loading = true);
 
+    final model = await ModelStorageResolver.matchModel(kw);
+    final storage = await ModelStorageResolver.matchStorage(kw);
+    final selectedPlatforms =
+        _platformsAll.where(_pickPlatforms.contains).toList();
+
     try {
-      final trend = await _repo.fetchTrend(kw);
+      final trend = await _repo.fetchTrend(
+        kw,
+        model: model,
+        storage: storage,
+        condition: _condition,
+        platforms: selectedPlatforms,
+      );
       final dates = trend.orderedDates;
       if (dates.isEmpty) throw StateError('no-dates');
 
-      final rec =
-          await _repo.fetchRecommendation(kw, isNew: _condition == '새제품');
+      final summary = await _repo.fetchSummary(
+        kw,
+        model: model,
+        storage: storage,
+        condition: _condition,
+        platforms: selectedPlatforms,
+      );
 
       setState(() {
         _trend = trend;
         _dates = dates;
-        _rec = rec;
+        _summary = summary;
         _hasSearched = true;
+        _resolvedModel = model;
+        _resolvedStorage = storage;
       });
     } catch (_) {
       setState(() {
         _trend = null;
         _dates = [];
-        _rec = null;
+        _summary = null;
         _hasSearched = true;
+        _resolvedModel = model;
+        _resolvedStorage = storage;
       });
       _toast('데이터 없음.');
     } finally {
@@ -169,10 +283,24 @@ class _AnalysisPageState extends State<AnalysisPage> {
   void _toast(String msg) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
+  Widget _resolvedChip(String label) => Chip(
+        label: Text(label),
+        backgroundColor:
+            Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(.6),
+      );
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final isNew = _condition == '새제품';
+    final modelLabel = formatModelLabel(_resolvedModel);
+    final storageLabel = formatStorageLabel(_resolvedStorage);
+    final trend = _trend;
+    final hasTrend = trend != null && _dates.isNotEmpty;
+    final summary = _summary;
+    final selectedPlatforms =
+        _platformsAll.where(_pickPlatforms.contains).toList();
+    final lineSpots =
+        hasTrend ? trend!.toLineSpots(_dates) : <FlSpot>[];
 
     return Column(
       children: [
@@ -181,8 +309,6 @@ class _AnalysisPageState extends State<AnalysisPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('시세 분석', style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 8),
               Row(
                 children: [
                   Expanded(
@@ -216,14 +342,13 @@ class _AnalysisPageState extends State<AnalysisPage> {
                   DropdownButton<String>(
                     value: _condition,
                     onChanged: (v) {
-                      if (v == null) return;
+                      if (v == null || v == _condition) return;
                       setState(() => _condition = v);
                       if (_hasSearched) _search();
                     },
-                    items: const [
-                      DropdownMenuItem(value: '중고', child: Text('중고')),
-                      DropdownMenuItem(value: '새제품', child: Text('새제품')),
-                    ],
+                    items: _conditionOptions
+                        .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                        .toList(),
                   ),
                   const SizedBox(width: 12),
                   Wrap(
@@ -233,20 +358,35 @@ class _AnalysisPageState extends State<AnalysisPage> {
                       return FilterChip(
                         label: Text(p),
                         selected: on,
-                        onSelected: (s) {
+                        onSelected: (selected) {
+                          var changed = false;
                           setState(() {
-                            if (s) {
-                              _pickPlatforms.add(p);
-                            } else {
-                              _pickPlatforms.remove(p);
+                            if (selected) {
+                              changed = _pickPlatforms.add(p);
+                            } else if (_pickPlatforms.length > 1) {
+                              changed = _pickPlatforms.remove(p);
                             }
                           });
+                          if (changed && _hasSearched) _search();
                         },
                       );
                     }).toList(),
                   ),
                 ],
               ),
+              if (modelLabel != null || storageLabel != null) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: [
+                    if (modelLabel != null)
+                      _resolvedChip('모델 $modelLabel'),
+                    if (storageLabel != null)
+                      _resolvedChip('용량 $storageLabel'),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -257,55 +397,47 @@ class _AnalysisPageState extends State<AnalysisPage> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: Column(
               children: [
+                if (_hasSearched)
+                  ChartCard(
+                    title: '시세 정보',
+                    child: summary == null
+                        ? const _Empty('데이터 없음')
+                        : MarketSummaryView(
+                            summary: summary,
+                            formatter: _fmt,
+                          ),
+                  ),
+                if (_hasSearched) const SizedBox(height: 16),
                 ChartCard(
-                  title: '날짜별 평균가 (선 그래프)',
-                  child: (_trend == null || _dates.isEmpty)
-                      ? const _Empty('데이터 없음')
-                      : TrendLineChart(
+                  title: '날짜별 평균 가격',
+                  child: hasTrend && lineSpots.isNotEmpty
+                      ? TrendLineChart(
                           dates: _dates,
-                          series: _pickPlatforms
-                              .map((p) => LineSeries(
-                                    label: p,
-                                    spots: _trend!
-                                        .toLineSpots(p, _dates, isNew: isNew),
-                                  ))
-                              .where((s) => s.spots.isNotEmpty)
-                              .toList(),
+                          series: [
+                            LineSeries(
+                              label: '전체',
+                              spots: lineSpots,
+                            ),
+                          ],
                           yLabelFormatter: (v) => _fmt.format(v),
-                        ),
+                        )
+                      : const _Empty('데이터 없음'),
                 ),
                 const SizedBox(height: 16),
                 ChartCard(
-                  title: '플랫폼별 평균가 (바 차트)',
-                  child: (_trend == null || _dates.isEmpty)
-                      ? const _Empty('데이터 없음')
-                      : PlatformBarChart(
-                          bars: _pickPlatforms
+                  title: '플랫폼별 평균 가격',
+                  child: hasTrend
+                      ? PlatformBarChart(
+                          bars: selectedPlatforms
                               .map((p) => BarDatum(
                                     platform: p,
-                                    value: _trend!
-                                        .avgPrice(p, _dates, isNew: isNew),
+                                    value: trend!.averageForPlatform(p),
                                   ))
                               .toList(),
                           yLabelFormatter: (v) => _fmt.format(v),
-                        ),
+                        )
+                      : const _Empty('데이터 없음'),
                 ),
-                const SizedBox(height: 16),
-                if (_rec != null)
-                  ChartCard(
-                    title: '적정가 추천',
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('추천 가격: ${_fmt.format(_rec!.recommended ?? 0)}원'),
-                        if (_rec!.range != null)
-                          Text(
-                              '예상 범위: ${_fmt.format(_rec!.range![0])}원 ~ ${_fmt.format(_rec!.range![1])}원'),
-                        if (_rec!.sampleCount != null)
-                          Text('샘플 수: ${_rec!.sampleCount}개'),
-                      ],
-                    ),
-                  ),
               ],
             ),
           ),
@@ -352,6 +484,65 @@ class _Empty extends StatelessWidget {
       SizedBox(height: 240, child: Center(child: Text(text)));
 }
 
+class MarketSummaryView extends StatelessWidget {
+  final MarketSummary summary;
+  final NumberFormat formatter;
+  const MarketSummaryView({
+    super.key,
+    required this.summary,
+    required this.formatter,
+  });
+
+  String _formatPrice(int? value) =>
+      value == null ? '-' : '${formatter.format(value)}원';
+
+  String _formatRange(int? min, int? max) {
+    if (min == null || max == null) return '-';
+    return '${formatter.format(min)}원 ~ ${formatter.format(max)}원';
+  }
+
+  String _formatChange(double? value) {
+    if (value == null) return '-';
+    final adjusted = value.abs() < 0.05 ? 0 : value;
+    if (adjusted == 0) return '0.0%';
+    final sign = adjusted > 0 ? '+' : '';
+    return '$sign${adjusted.toStringAsFixed(1)}%';
+  }
+
+  Widget _row(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                value,
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ],
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _row('평균 가격', _formatPrice(summary.averagePrice)),
+        _row('가격 범위', _formatRange(summary.minPrice, summary.maxPrice)),
+        _row('가격 변화', _formatChange(summary.priceChangePct)),
+      ],
+    );
+  }
+}
+
 /// ---------- 차트 전용 타입/위젯 ----------
 
 class LineSeries {
@@ -390,14 +581,17 @@ class TrendLineChart extends StatelessWidget {
     final double interval = max(1.0, (dates.length / 6).floorToDouble());
 
     // 보기 좋은 y축 범위 (5만 단위 라운딩)
-    double? minY, maxY;
-    if (series.isNotEmpty && series.first.spots.isNotEmpty) {
+    const double priceInterval = 100000;
+    const double minY = 0;
+    double maxY = priceInterval;
+    final hasData = series.any((s) => s.spots.isNotEmpty);
+    if (hasData) {
       final allY = series.expand((s) => s.spots.map((p) => p.y)).toList();
-      final mi = allY.reduce(min), ma = allY.reduce(max);
-      int round5(x) => (x / 50000).floor() * 50000;
-      int round5up(x) => ((x / 50000).ceil()) * 50000;
-      minY = round5(mi.toInt()).toDouble();
-      maxY = round5up(ma.toInt()).toDouble();
+      if (allY.isNotEmpty) {
+        final ma = allY.reduce(max);
+        final steps = max(1, (ma / priceInterval).ceil());
+        maxY = steps * priceInterval;
+      }
     }
 
     final fallback = Theme.of(context).colorScheme.primary;
@@ -411,7 +605,7 @@ class TrendLineChart extends StatelessWidget {
           gridData: FlGridData(
             show: true,
             drawVerticalLine: true,
-            horizontalInterval: 50000,
+            horizontalInterval: priceInterval,
             getDrawingHorizontalLine: (_) => FlLine(
                 color: Colors.grey.withOpacity(.2),
                 strokeWidth: 1,
@@ -425,7 +619,7 @@ class TrendLineChart extends StatelessWidget {
               sideTitles: SideTitles(
                 showTitles: true,
                 reservedSize: 56,
-                interval: 50000,
+                interval: priceInterval,
                 getTitlesWidget: (v, _) => Text(
                   yLabelFormatter(v),
                   style: const TextStyle(fontSize: 11, color: Colors.black54),
@@ -524,14 +718,26 @@ class PlatformBarChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fallback = Theme.of(context).colorScheme.primary;
+    const double priceInterval = 100000;
+    double maxY = priceInterval;
+    if (bars.isNotEmpty) {
+      final values = bars.map((b) => b.value.toDouble()).toList();
+      if (values.isNotEmpty) {
+        final ma = values.reduce(max);
+        final steps = max(1, (ma / priceInterval).ceil());
+        maxY = steps * priceInterval;
+      }
+    }
     return SizedBox(
       height: 260,
       child: BarChart(
         BarChartData(
+          minY: 0,
+          maxY: maxY,
           gridData: FlGridData(
             show: true,
             drawVerticalLine: false,
-            horizontalInterval: 50000,
+            horizontalInterval: priceInterval,
             getDrawingHorizontalLine: (_) => FlLine(
                 color: Colors.grey.withOpacity(.2),
                 strokeWidth: 1,
@@ -543,7 +749,7 @@ class PlatformBarChart extends StatelessWidget {
               sideTitles: SideTitles(
                 showTitles: true,
                 reservedSize: 56,
-                interval: 50000,
+                interval: priceInterval,
                 getTitlesWidget: (v, _) => Text(
                   yLabelFormatter(v),
                   style: const TextStyle(fontSize: 11, color: Colors.black54),

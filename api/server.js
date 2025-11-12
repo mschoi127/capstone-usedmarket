@@ -9,8 +9,8 @@ app.use(express.json()); // 요청 본문에서 JSON 파싱
 app.use(cors()); // 모든 출처에서의 요청 허용
 app.use('/products', productRoutes); // /products로 시작하는 요청은 productRoutes로 위임
 // MongoDB에 연결
-mongoose.connect('mongodb://localhost:27017/market2')
-  .then(() => console.log('MongoDB Atlas connected'))
+mongoose.connect('mongodb://localhost:27017/market2', { dbName: 'market2' })
+  .then(() => console.log('MongoDB connected'))
   .catch(err => console.log(err));
 
 // 서버 실행 (포트 3001번)

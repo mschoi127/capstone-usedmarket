@@ -17,7 +17,7 @@ class MyApp extends StatelessWidget {
       deps: buildDeps(),
       child: MaterialApp.router(
         debugShowCheckedModeBanner: false,
-        title: 'JonggoJoa Mobile',
+        title: '02-15',
         theme: buildAppTheme(),
         routerConfig: router,
       ),

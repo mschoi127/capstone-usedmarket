@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 import 'pages/main_search_page.dart';
 import 'pages/chatbot_page.dart';
 import 'pages/market_analysis_page.dart';
-import 'pages/dashboard_page.dart';
 
 class MainShell extends StatelessWidget {
   const MainShell({super.key, required this.child});
@@ -18,19 +17,21 @@ class MainShell extends StatelessWidget {
         path: '/chat',
         icon: Icons.chat_bubble_outline,
         label: 'Chat',
-        title: 'Chatbot'
+        title: '중고거래 상담봇'
       ),
-      (path: '/', icon: Icons.search, label: 'Search', title: 'Search'),
+      (path: '/search', icon: Icons.search, label: 'Search', title: '중고거래 통합검색'),
       (
         path: '/analysis',
         icon: Icons.insights,
         label: 'Analysis',
-        title: 'Analysis'
+        title: '중고거래 시세조회'
       ),
     ];
 
-    int idx =
-        tabs.indexWhere((t) => uri == t.path || uri.startsWith('${t.path}/'));
+    final currentPath = uri == '/' ? '/chat' : uri;
+    int idx = tabs.indexWhere(
+      (t) => currentPath == t.path || currentPath.startsWith('${t.path}/'),
+    );
     if (idx < 0) idx = 0;
 
     return Scaffold(
@@ -54,14 +55,15 @@ final router = GoRouter(
     ShellRoute(
       builder: (context, state, child) => MainShell(child: child),
       routes: [
-        GoRoute(path: '/', builder: (context, state) => const MainSearchPage()),
         GoRoute(
             path: '/chat', builder: (context, state) => const ChatbotBody()),
         GoRoute(
+            path: '/search',
+            builder: (context, state) => const MainSearchPage()),
+        GoRoute(
             path: '/analysis',
             builder: (context, state) => const AnalysisPage()),
-        GoRoute(
-            path: '/dash', builder: (context, state) => const DashboardBody()),
+        GoRoute(path: '/', redirect: (context, state) => '/chat'),
       ],
     ),
   ],

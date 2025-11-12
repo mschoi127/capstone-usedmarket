@@ -12,9 +12,12 @@ const productSchema = new mongoose.Schema({
   status: String,           // 판매 상태
   category: String,         // 카테고리
   description: String,      // 제품 설명
-  platform: String          // 수집한 플랫폼 이름
+  platform: String,         // 수집한 플랫폼 이름
+  title_normalization: String,
+  model_name: String,
+  storage: String
 }, {
-  collection: 'temp'        // 컬렉션 이름 명시적으로 지정
+  collection: 'products'    // 컬렉션 이름 명시적으로 지정
 });
 
 // Product 모델 생성 및 export

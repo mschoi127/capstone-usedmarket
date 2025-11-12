@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../data/model_storage_resolver.dart';
+import '../utils/model_formatters.dart';
 
 class MainSearchPage extends StatefulWidget {
   const MainSearchPage({super.key});
@@ -13,8 +15,8 @@ class _MainSearchPageState extends State<MainSearchPage> {
       _min = TextEditingController(),
       _max = TextEditingController();
 
-  final _platforms = {'당근마켓', '번개장터', '중고나라'};
-  final _picked = <String>{'당근마켓', '번개장터', '중고나라'};
+  final _platforms = {'번개장터', '당근마켓', '중고나라'};
+  final _picked = <String>{'번개장터', '당근마켓', '중고나라'};
   final _sorts = ['최신순', '가격 낮은순', '가격 높은순'];
   String _sort = '최신순';
 
@@ -24,6 +26,8 @@ class _MainSearchPageState extends State<MainSearchPage> {
 
   int _page = 1;
   int _lastCount = 0;
+  String? _resolvedModel;
+  String? _resolvedStorage;
   Future<List<Product>>? _future;
 
   @override
@@ -48,10 +52,10 @@ class _MainSearchPageState extends State<MainSearchPage> {
 
   String? _platformToServer(String ui) {
     switch (ui) {
-      case '당근마켓':
-        return '당근마켓';
       case '번개장터':
         return '번개장터';
+      case '당근마켓':
+        return '당근마켓';
       case '중고나라':
         return '중고나라';
       default:
@@ -59,7 +63,8 @@ class _MainSearchPageState extends State<MainSearchPage> {
     }
   }
 
-  Future<List<Product>> _fetch(int page) async {
+  Future<List<Product>> _fetch(int page,
+      {String? model, String? storage}) async {
     final dio = Dio(
       BaseOptions(
         baseUrl: baseUrl,
@@ -68,6 +73,12 @@ class _MainSearchPageState extends State<MainSearchPage> {
         headers: {'Content-Type': 'application/json'},
       ),
     );
+
+    final queryKeyword = _q.text.trim();
+    String? resolvedModel = model;
+    String? resolvedStorage = storage;
+    resolvedModel ??= await ModelStorageResolver.matchModel(queryKeyword);
+    resolvedStorage ??= await ModelStorageResolver.matchStorage(queryKeyword);
 
     dio.interceptors.add(
       LogInterceptor(
@@ -95,6 +106,12 @@ class _MainSearchPageState extends State<MainSearchPage> {
       'page': page,
       'limit': _limit,
     };
+    if (resolvedModel != null && resolvedModel.isNotEmpty) {
+      qp['model'] = resolvedModel;
+    }
+    if (resolvedStorage != null && resolvedStorage.isNotEmpty) {
+      qp['storage'] = resolvedStorage;
+    }
 
     final resp = await dio.get('/products', queryParameters: qp);
     if (resp.statusCode != 200) {
@@ -117,10 +134,15 @@ class _MainSearchPageState extends State<MainSearchPage> {
     return items;
   }
 
-  void _search([int page = 1]) {
-    _page = page;
+  Future<void> _search([int page = 1]) async {
+    final kw = _q.text.trim();
+    final model = await ModelStorageResolver.matchModel(kw);
+    final storage = await ModelStorageResolver.matchStorage(kw);
     setState(() {
-      _future = _fetch(_page); // setState는 void만 반환
+      _page = page;
+      _resolvedModel = model;
+      _resolvedStorage = storage;
+      _future = _fetch(_page, model: model, storage: storage); // setState는 void만 반환
     });
   }
 
@@ -134,6 +156,8 @@ class _MainSearchPageState extends State<MainSearchPage> {
     _sort = '최신순';
     _page = 1;
     _lastCount = 0;
+    _resolvedModel = null;
+    _resolvedStorage = null;
     setState(() {
       _future = _fetch(_page);
     });
@@ -173,6 +197,8 @@ class _MainSearchPageState extends State<MainSearchPage> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final modelLabel = formatModelLabel(_resolvedModel);
+    final storageLabel = formatStorageLabel(_resolvedStorage);
 
     Widget searchBar() => TextField(
           controller: _q,
@@ -302,6 +328,16 @@ class _MainSearchPageState extends State<MainSearchPage> {
         }
       }
 
+      final modelLabel = formatModelLabel(it.modelName);
+      final storageLabel = formatStorageLabel(it.storage);
+      final metaWidgets = <Widget>[];
+      if (modelLabel != null) {
+        metaWidgets.add(_metaChip(modelLabel));
+      }
+      if (storageLabel != null) {
+        metaWidgets.add(_metaChip(storageLabel));
+      }
+
       return ListTile(
         onTap: () => _openUrl(it.url), // 카드 탭 시 링크 열기
         leading: ClipRRect(
@@ -317,27 +353,42 @@ class _MainSearchPageState extends State<MainSearchPage> {
           ),
         ),
         title: Text(it.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-        subtitle: Row(
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: pColor().withOpacity(.12),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                it.platform,
-                style: TextStyle(color: pColor(), fontWeight: FontWeight.w700),
-              ),
+            Row(
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: pColor().withOpacity(.12),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    it.platform,
+                    style:
+                        TextStyle(color: pColor(), fontWeight: FontWeight.w700),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    it.time ?? '',
+                    style: TextStyle(color: cs.outline),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                it.time ?? '',
-                style: TextStyle(color: cs.outline),
-                overflow: TextOverflow.ellipsis,
+            if (metaWidgets.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: metaWidgets,
               ),
-            ),
+            ],
           ],
         ),
         trailing: Text(
@@ -492,6 +543,19 @@ class _MainSearchPageState extends State<MainSearchPage> {
               ],
             ),
             const SizedBox(height: 16),
+            if (modelLabel != null || storageLabel != null) ...[
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  if (modelLabel != null)
+                    _metaChip('모델 $modelLabel'),
+                  if (storageLabel != null)
+                    _metaChip('용량 $storageLabel'),
+                ],
+              ),
+              const SizedBox(height: 16),
+            ],
             resultArea(),
           ],
         ),
@@ -503,6 +567,15 @@ class _MainSearchPageState extends State<MainSearchPage> {
     final s = n.toStringAsFixed(0);
     return s.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',');
   }
+
+  Widget _metaChip(String label) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(.55),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(label, style: const TextStyle(fontSize: 12)),
+      );
 }
 
 class Product {
@@ -510,6 +583,8 @@ class Product {
   final num? price;
   final String? imageUrl, time;
   final String? url; // 링크 필드
+  final String? modelName;
+  final String? storage;
 
   Product({
     required this.id,
@@ -519,6 +594,8 @@ class Product {
     this.imageUrl,
     this.time,
     this.url,
+    this.modelName,
+    this.storage,
   });
 
   factory Product.fromJson(Map<String, dynamic> j) {
@@ -539,6 +616,8 @@ class Product {
               ?.toString(),
       time: (j['upload_time'] ?? j['createdAt'] ?? j['time'])?.toString(),
       url: (j['url'] ?? j['link'])?.toString(),
+      modelName: j['model_name']?.toString(),
+      storage: j['storage']?.toString(),
     );
   }
 }
